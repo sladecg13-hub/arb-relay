@@ -1,0 +1,453 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0b0f14">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>Arb Station</title>
+<style>
+  :root{--bg:#0b0f14;--card:#141b24;--line:#233040;--txt:#e6edf3;--dim:#8b9bb0;--good:#2ecc71;--bad:#e5534b;--warn:#e3b341;--acc:#58a6ff}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--txt);font:15px/1.4 -apple-system,system-ui,Segoe UI,Roboto,sans-serif;padding:env(safe-area-inset-top) 16px 40px}
+  h1{font-size:20px;margin:16px 0 2px} .sub{color:var(--dim);font-size:13px;margin-bottom:8px}
+  .tabs{display:flex;gap:8px;margin:12px 0} .tabs button{flex:1;padding:10px;border-radius:10px;border:1px solid var(--line);background:var(--card);color:var(--txt);font-weight:600;font-size:15px}
+  .tabs button.on{border-color:var(--acc);color:var(--acc)}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px;margin:10px 0}
+  .big{font-size:24px;font-weight:700} .good{color:var(--good)} .bad{color:var(--bad)} .warn{color:var(--warn)} .dim{color:var(--dim)}
+  table{width:100%;border-collapse:collapse;font-size:14px} td,th{padding:6px 4px;text-align:left;border-bottom:1px solid var(--line)} th{color:var(--dim);font-weight:500;font-size:12px}
+  td.r,th.r{text-align:right} .row{display:flex;justify-content:space-between;gap:8px;align-items:center}
+  label{display:block;color:var(--dim);font-size:12px;margin:8px 0 4px} input,select{width:100%;padding:10px;border-radius:8px;border:1px solid var(--line);background:#0e141b;color:var(--txt);font-size:16px}
+  .btn{padding:12px;border-radius:10px;border:0;background:var(--acc);color:#04111f;font-weight:700;font-size:15px;width:100%;margin-top:10px}
+  .btn.stop{background:var(--bad);color:#fff} .btn.ghost{background:var(--card);color:var(--txt);border:1px solid var(--line)}
+  .note{font-size:12px;color:var(--dim);margin-top:8px} .pill{font-size:11px;padding:2px 8px;border-radius:99px;border:1px solid var(--line);color:var(--dim)}
+  .log{max-height:260px;overflow:auto;font-size:13px;word-break:break-word} .hide{display:none}
+  .chk{display:flex;gap:10px;align-items:flex-start;margin-top:12px;font-size:14px} .chk input{width:auto;margin-top:3px}
+  .warnbox{border:1px solid var(--warn);border-radius:10px;padding:10px;font-size:13px;margin-top:10px}
+
+  .spider{width:100%;height:150px;display:block;background:#0e141b;border-radius:10px}
+  .spwrap .note{margin-top:8px;font-weight:600}
+</style>
+</head>
+<body>
+<h1>Arb Station</h1>
+<div class="sub">Exchange scanner + wallet-connected flash loan arbitrage. Your keys stay in your wallet; every trade is signed there.</div>
+
+<div class="tabs" id="mainTabs"><button data-t="cex" class="on">Scanner</button><button data-t="dex">Flash Loan Arb</button></div>
+
+<!-- ================= TAB 1: CEX SCANNER ================= -->
+<div id="tab-cex">
+  <div class="tabs" id="coinTabs"></div>
+  <div class="card spwrap"><canvas id="spCex" class="spider"></canvas><div class="note" id="spCexStatus"></div></div>
+  <div class="row"><span class="pill" id="state">idle</span><span class="dim" id="upd"></span></div>
+  <div class="card">
+    <div class="dim" style="font-size:12px">Best net opportunity right now (exchange to exchange)</div>
+    <div class="big" id="bestNet">--</div>
+    <div id="bestDesc" class="dim"></div>
+    <div class="note">Net = sell bid minus buy ask, minus both exchanges' taker fees, on top-of-book prices. Real fills on size are usually worse. This tab only watches; it does not trade.</div>
+  </div>
+  <div class="card"><div class="row"><b>Prices</b><span class="dim" id="symLabel"></span></div>
+    <table><thead><tr><th>Exchange</th><th class="r">Bid</th><th class="r">Ask</th><th class="r">Fee</th></tr></thead><tbody id="prices"></tbody></table></div>
+  <div class="card"><b>Top pairs</b>
+    <table><thead><tr><th>Buy → Sell</th><th class="r">Gross</th><th class="r">Net bps</th><th class="r">Net $</th></tr></thead><tbody id="pairs"></tbody></table></div>
+  <div class="card"><b>Settings</b>
+    <label>Trade size (USD)</label><input id="size" type="number" inputmode="decimal" value="10000">
+    <label>Alert when net is above (bps, 100 bps = 1%)</label><input id="thr" type="number" inputmode="decimal" value="5">
+    <label>Refresh every (seconds)</label><input id="every" type="number" inputmode="decimal" value="5">
+    <label>Extra cost per round trip (bps): withdrawal, slippage cushion</label><input id="extra" type="number" inputmode="decimal" value="0">
+    <button class="btn" id="go">Start scanning</button>
+    <div class="note">Fee defaults are typical taker rates; edit the FEES object in the script to match your tier.</div></div>
+  <div class="card"><div class="row"><b>Hits log</b><span class="pill" id="hitCount">0</span></div>
+    <div class="log" id="log"><span class="dim">Opportunities above your threshold appear here.</span></div>
+    <button class="btn ghost" id="csv">Download log (CSV)</button></div>
+</div>
+
+<!-- ================= TAB 2: FLASH LOAN ARB ================= -->
+<div id="tab-dex" class="hide">
+  <div class="card spwrap"><canvas id="spDex" class="spider"></canvas><div class="note" id="spDexStatus"></div></div>
+
+  <div class="card">
+    <div class="row"><b>Wallet</b><span class="pill" id="wState">not connected</span></div>
+    <div class="note" id="wAddr"></div>
+    <button class="btn" id="connect">Connect wallet</button>
+    <div class="note">Open this page inside your wallet's built-in browser (MetaMask, Coinbase Wallet, Trust) so it can see the wallet. Fund that wallet with gas money only (ETH). Flash loans need no trading capital.</div>
+  </div>
+
+  <div class="card">
+    <b>Network and pools</b>
+    <label>Preset</label>
+    <select id="preset"><option value="">Choose...</option><option value="eth">Ethereum mainnet: Uniswap V2 vs Sushi, WBTC/USDC</option><option value="base">Base: Uniswap V2 vs Sushi, cbBTC/USDC</option></select>
+    <label>Aave V3 Pool</label><input id="fPool">
+    <label>Router A (Uniswap-V2 style)</label><input id="fRA">
+    <label>Router B (different V2-style DEX)</label><input id="fRB">
+    <label>Borrow token (stablecoin)</label><input id="fStable">
+    <label>Bitcoin token (WBTC / cbBTC)</label><input id="fMid">
+    <label>Stablecoin decimals</label><input id="fDec" type="number" value="6">
+    <div class="warnbox">Preset addresses are from memory of public deployments. Verify every address against the project's official docs or a block explorer before deploying or sending anything.</div>
+  </div>
+
+  <div class="card">
+    <b>Trade settings</b>
+    <label>Flash loan size (USD)</label><input id="fBorrow" type="number" inputmode="decimal" value="10000">
+    <label>Minimum profit per trade after flash fee and gas (USD)</label><input id="fMin" type="number" inputmode="decimal" value="25">
+    <label>Max gas price (gwei)</label><input id="fGas" type="number" inputmode="decimal" value="30">
+    <label>ETH price (USD, blank = fetch from Coinbase)</label><input id="fEth" type="number" inputmode="decimal">
+    <label>Send profit to (wallet address)</label><input id="fProfit" placeholder="defaults to the connected wallet">
+    <label>Flash loan fee (bps; Aave V3 is usually 5)</label><input id="fPrem" type="number" value="5">
+  </div>
+
+  <div class="card">
+    <b>Your arbitrage contract</b>
+    <div class="note" id="cState">Not deployed yet.</div>
+    <label>Contract address (paste an existing one, or deploy)</label><input id="fArb" placeholder="0x...">
+    <button class="btn" id="deploy">Deploy contract from my wallet</button>
+    <div class="note">Deploy costs gas. The contract only accepts commands from the wallet that deployed it, and it reverts any trade that would not clear your minimum profit, so a failed attempt costs only gas. It has not been security audited.</div>
+  </div>
+
+  <div class="card">
+    <div class="row"><b>Flash loan agent</b><span class="pill" id="dState">idle</span></div>
+    <div class="note" style="margin:4px 0 8px">Every 6 seconds it checks Aave's fee and available cash, tries four loan sizes in both directions, adds up gas, and simulates the exact trade. It only says GO when every check passes.</div>
+    <div class="big" id="agVerdict">Agent idle</div>
+    <div class="big" id="dBest" style="font-size:18px">--</div><div id="dDesc" class="dim"></div>
+    <div id="agChecks" class="note" style="font-size:13px"></div>
+    <div style="overflow-x:auto"><table id="agCurve"></table></div>
+    <label class="chk"><input type="checkbox" id="armed"><span>Armed: when a trade passes every check, send it to my wallet for approval. Unchecked = watch only.</span></label>
+    <button class="btn" id="dGo">Start scanning</button>
+    <div class="note">Each trade is still approved in your wallet; the page cannot move funds by itself. The page must stay open and the phone awake while it runs, and wallet apps may pause it in the background.</div>
+  </div>
+
+  <div class="card"><div class="row"><b>Activity</b><span class="pill" id="dCount">0</span></div>
+    <div class="log" id="dLog"><span class="dim">Nothing yet.</span></div></div>
+
+  <div class="card"><b>Reality check</b>
+    <div class="note" style="font-size:13px">On Ethereum mainnet, a public transaction like this is visible to MEV bots, which often copy or beat it. Use a private RPC such as Flashbots Protect in your wallet's network settings. Profit has to beat about 0.65% in swap fees plus the flash fee plus gas, and gaps that large between two big pools are rare and short. Expect this to find nothing most days. No profit is guaranteed. Not financial advice.</div></div>
+</div>
+
+<script>
+// ---------------- shared helpers ----------------
+const $ = id => document.getElementById(id);
+const f2 = (x,d=2) => x.toLocaleString(undefined,{minimumFractionDigits:d,maximumFractionDigits:d});
+$("mainTabs").onclick = e => { const t = e.target.dataset.t; if(!t) return;
+  for(const b of $("mainTabs").children) b.classList.toggle("on", b.dataset.t===t);
+  $("tab-cex").classList.toggle("hide", t!=="cex"); $("tab-dex").classList.toggle("hide", t!=="dex"); setTimeout(()=>{window.SPIDER_CEX.relayout();window.SPIDER_DEX.relayout();},0); };
+
+
+// ---------------- spider status window ----------------
+function makeSpider(canvasId, statusId, names, staleSec){
+  const cv=$(canvasId), cx=cv.getContext("2d"), st=$(statusId), dpr=Math.min(2,window.devicePixelRatio||1);
+  const reduce = window.matchMedia && matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const S={mode:"idle",nodes:names.map(n=>({n,state:"idle",txt:"",flash:0,x:0,y:0})),x:0,y:0,ang:-Math.PI/2,queue:[],pend:{},phase:0,last:0,ok:0,total:names.length,note:""};
+  let W=0,H=0,prev=performance.now();
+  function layout(){ const r=cv.getBoundingClientRect(); W=r.width; H=r.height; if(!W) return; cv.width=W*dpr; cv.height=H*dpr; cx.setTransform(dpr,0,0,dpr,0,0);
+    const n=S.nodes.length; S.nodes.forEach((o,i)=>{ const t=n===1?.5:i/(n-1); o.x=34+t*(W-68); o.y=(i%2===0)?H*0.32:H*0.72; }); if(!S.x){S.x=W/2;S.y=H/2;} }
+  function leg(i,len,ph){ const side=i<4?1:-1, k=i%4, base=(-0.9+k*0.62)*side, wob=Math.sin(ph*6+k*1.7+(side>0?0:Math.PI))*0.28; const a=Math.PI/2*side+base*0+ (k-1.5)*0.55*side*-1 + wob; return a; }
+  function drawSpider(){ cx.save(); cx.translate(S.x,S.y); cx.rotate(S.ang+Math.PI/2); const moving=S.queue.length>0&&S.mode!=="idle", ph=moving?S.phase:0;
+    cx.strokeStyle="#c9d4e0"; cx.lineWidth=1.6; cx.lineCap="round";
+    for(let i=0;i<8;i++){ const side=i<4?1:-1,k=i%4, ax=(k-1.5)*5, wob=moving?Math.sin(ph*0.02+k*1.6+(side>0?0:Math.PI))*4:0, fx=side*(15+Math.abs(k-1.5)*2), fy=(k-1.5)*8+wob;
+      cx.beginPath(); cx.moveTo(0,ax*0.5); cx.lineTo(side*9,ax*0.5-5+wob*0.5); cx.lineTo(fx,fy); cx.stroke(); }
+    cx.fillStyle="#e6edf3"; cx.beginPath(); cx.ellipse(0,3,6,8,0,0,7); cx.fill();
+    cx.beginPath(); cx.arc(0,-7,4,0,7); cx.fill();
+    cx.fillStyle="#0b0f14"; cx.beginPath(); cx.arc(-1.6,-8,1,0,7); cx.arc(1.6,-8,1,0,7); cx.fill(); cx.restore(); }
+  function frame(now){ const dt=Math.min(0.05,(now-prev)/1000); prev=now;
+    if(cv.getBoundingClientRect().width!==W) layout(); if(!W){requestAnimationFrame(frame);return;}
+    S.phase+=dt*1000; cx.clearRect(0,0,W,H);
+    cx.strokeStyle="rgba(139,155,176,.25)"; cx.lineWidth=1; cx.beginPath(); S.nodes.forEach((o,i)=>{ i?cx.lineTo(o.x,o.y):cx.moveTo(o.x,o.y); }); cx.stroke();
+    for(const o of S.nodes){ o.flash=Math.max(0,o.flash-dt*1.5);
+      const col=o.state==="ok"?"#2ecc71":o.state==="bad"?"#e5534b":"#5b6b7e";
+      if(o.flash>0){ cx.strokeStyle=col; cx.globalAlpha=o.flash; cx.lineWidth=2; cx.beginPath(); cx.arc(o.x,o.y,6+(1-o.flash)*12,0,7); cx.stroke(); cx.globalAlpha=1; }
+      cx.fillStyle=col; cx.beginPath(); cx.arc(o.x,o.y,6,0,7); cx.fill();
+      cx.fillStyle="#8b9bb0"; cx.font="10px system-ui,sans-serif"; cx.textAlign="center"; const top=o.y<H/2;
+      cx.fillText(o.n,o.x,top?o.y-12:o.y+19); if(o.txt){ cx.fillStyle=col; cx.fillText(o.txt,o.x,top?o.y+19:o.y-12); } }
+    // movement
+    if(S.mode==="idle"){ const cxm=W/2,cym=H/2; S.x+=(cxm-S.x)*dt*3; S.y+=(cym-S.y)*dt*3; cx.fillStyle="#8b9bb0"; cx.font="12px system-ui,sans-serif"; cx.textAlign="left"; cx.fillText("z z z",S.x+18,S.y-10); }
+    else { const tgt=S.queue[0]; if(tgt){ const dx=tgt.x-S.x, dy=tgt.y-S.y, d=Math.hypot(dx,dy); S.ang=Math.atan2(dy,dx);
+        const sp=reduce?9999:150; if(d<5){ const r=S.pend[tgt.n]; if(r){ tgt.state=r.ok?"ok":"bad"; tgt.txt=r.txt||""; tgt.flash=1; delete S.pend[tgt.n]; } S.queue.shift(); } else { S.x+=dx/d*Math.min(d,sp*dt); S.y+=dy/d*Math.min(d,sp*dt); } }
+      else { const t=now/1000; const hx=W/2+Math.sin(t*0.8)*18, hy=H/2+Math.cos(t*1.1)*8; const dx=hx-S.x, dy=hy-S.y; if(Math.hypot(dx,dy)>1){ S.ang=Math.atan2(dy,dx); S.x+=dx*dt*1.2; S.y+=dy*dt*1.2; } } }
+    drawSpider(); requestAnimationFrame(frame); }
+  function status(){ let t,c;
+    if(S.mode==="idle"){ t="Stopped. Press Start scanning."; c="var(--dim)"; }
+    else if(!S.last){ t="Starting... waiting for the first answers."; c="var(--warn)"; }
+    else { const age=Math.round((Date.now()-S.last)/1000);
+      if(age>staleSec){ t="NOT WORKING: no new data for "+age+"s. "+(S.note||""); c="var(--bad)"; }
+      else if(S.ok===0){ t="NOT WORKING: nothing answered. "+(S.note||""); c="var(--bad)"; }
+      else if(S.ok<S.total){ t="WORKING (partial): "+S.ok+" of "+S.total+" answered, updated "+age+"s ago"; c="var(--warn)"; }
+      else { t="WORKING: all "+S.total+" answered, updated "+age+"s ago"; c="var(--good)"; } }
+    st.textContent=t; st.style.color=c; }
+  setInterval(status,1000); status(); layout(); requestAnimationFrame(frame); window.addEventListener("resize",layout);
+  return {
+    start(){ S.mode="scanning"; S.last=0; S.ok=0; S.note=""; S.nodes.forEach(o=>{o.state="idle";o.txt="";}); status(); },
+    stop(){ S.mode="idle"; S.queue=[]; S.pend={}; S.nodes.forEach(o=>{o.state="idle";o.txt="";}); status(); },
+    report(results, note){ if(S.mode==="idle") return; S.last=Date.now(); S.note=note||""; S.ok=0; S.queue=[]; S.pend={};
+      for(const o of S.nodes){ const r=results[o.n]||{ok:false,txt:"x"}; if(r.ok) S.ok++; S.pend[o.n]=r; S.queue.push(o); } status(); },
+    relayout:layout
+  };
+}
+window.SPIDER_CEX = makeSpider("spCex","spCexStatus",["Kraken","Coinbase","Bitstamp","Gemini","OKX","Bybit","KuCoin"],20);
+window.SPIDER_DEX = makeSpider("spDex","spDexStatus",["Router A","Router B"],25);
+
+// ---------------- TAB 1: exchange scanner ----------------
+(function(){
+window.RELAY = false;
+try{ if(location.protocol.indexOf("http")===0) fetch("/api/ping",{cache:"no-store"}).then(r=>r.json()).then(d=>{ if(d&&d.arbstation) window.RELAY=true; }).catch(()=>{}); }catch(e){}
+
+
+// Taker fee estimates in bps (1 bp = 0.01%). Edit to match your account tier.
+const FEES = {Kraken:26, Coinbase:40, Bitstamp:40, Gemini:40, OKX:10, Bybit:10, KuCoin:10};
+
+// Each fetcher returns {bid, ask} as numbers. Missing pairs just fail and are skipped.
+const J = async u => { const r = await fetch(u, {cache:"no-store"}); if(!r.ok) throw new Error(r.status); return r.json(); };
+const N = x => { const v = parseFloat(x); if(!(v>0)) throw new Error("bad"); return v; };
+const KR = {BTC:"XBTUSD", ZEC:"ZECUSD", SOL:"SOLUSD"};
+const CB = {BTC:"BTC-USD", ZEC:"ZEC-USD", SOL:"SOL-USD"};
+const BS = {BTC:"btcusd", ZEC:"zecusd", SOL:"solusd"};
+const GM = {BTC:"btcusd", ZEC:"zecusd", SOL:"solusd"};
+const SRC = {
+  Kraken:   async s => { const d = await J("https://api.kraken.com/0/public/Ticker?pair="+KR[s]); if(d.error&&d.error.length) throw 0; const t = Object.values(d.result)[0]; return {bid:N(t.b[0]), ask:N(t.a[0])}; },
+  Coinbase: async s => { const d = await J("https://api.exchange.coinbase.com/products/"+CB[s]+"/ticker"); return {bid:N(d.bid), ask:N(d.ask)}; },
+  Bitstamp: async s => { const d = await J("https://www.bitstamp.net/api/v2/ticker/"+BS[s]+"/"); return {bid:N(d.bid), ask:N(d.ask)}; },
+  Gemini:   async s => { const d = await J("https://api.gemini.com/v1/pubticker/"+GM[s]); return {bid:N(d.bid), ask:N(d.ask)}; },
+  OKX:      async s => { const d = await J("https://www.okx.com/api/v5/market/ticker?instId="+s+"-USDT"); const t = d.data[0]; return {bid:N(t.bidPx), ask:N(t.askPx)}; },
+  Bybit:    async s => { const d = await J("https://api.bybit.com/v5/market/tickers?category=spot&symbol="+s+"USDT"); const t = d.result.list[0]; return {bid:N(t.bid1Price), ask:N(t.ask1Price)}; },
+  KuCoin:   async s => { const d = await J("https://api.kucoin.com/api/v1/market/orderbook/level1?symbol="+s+"-USDT"); return {bid:N(d.data.bestBid), ask:N(d.data.bestAsk)}; },
+};
+
+// Pure math, tested separately: best buy/sell pairs given quotes {name:{bid,ask}}.
+function rankPairs(quotes, sizeUsd, extraBps){
+  const out = [], names = Object.keys(quotes);
+  for(const b of names) for(const s of names){
+    if(b===s) continue;
+    const ask = quotes[b].ask, bid = quotes[s].bid;
+    const gross = (bid-ask)/ask*1e4;
+    const net = gross - (FEES[b]||30) - (FEES[s]||30) - extraBps;
+    out.push({buy:b, sell:s, ask, bid, gross, net, usd: sizeUsd*net/1e4});
+  }
+  return out.sort((x,y)=>y.net-x.net);
+}
+
+const $ = id => document.getElementById(id);
+const SYMS = ["BTC","ZEC","SOL"];
+let sym = "BTC", timer = null, running = false, hits = [], busy = false;
+try{ const sv = JSON.parse(localStorage.getItem("arb_cfg")||"{}"); for(const k of ["size","thr","every","extra"]) if(sv[k]) $(k).value = sv[k]; }catch(e){}
+const saveCfg = () => { try{ localStorage.setItem("arb_cfg", JSON.stringify({size:$("size").value,thr:$("thr").value,every:$("every").value,extra:$("extra").value})); }catch(e){} };
+const f2 = (x,d=2) => x.toLocaleString(undefined,{minimumFractionDigits:d,maximumFractionDigits:d});
+
+$("coinTabs").innerHTML = SYMS.map(s=>`<button data-s="${s}" class="${s===sym?'on':''}">${s}</button>`).join("");
+$("coinTabs").onclick = e => { const s = e.target.dataset.s; if(!s) return; sym = s; for(const b of $("coinTabs").children) b.classList.toggle("on", b.dataset.s===s); $("symLabel").textContent = s; if(running) tick(); };
+$("symLabel").textContent = sym;
+
+async function tick(){
+  if(busy) return; busy = true;
+  const size = +$("size").value||10000, thr = +$("thr").value||0, extra = +$("extra").value||0;
+  const cur = sym;
+  $("state").textContent = "scanning..."; $("state").className = "pill";
+  const names = Object.keys(SRC);
+  let res; const errs = {};
+  if(window.RELAY){ try{ const d = await J("/api/quotes?symbol="+cur); res = names.map(n=>{ if(d[n]&&d[n].bid) return {status:"fulfilled",value:{bid:d[n].bid,ask:d[n].ask}}; errs[n]=(d[n]&&d[n].error)||"no data"; return {status:"rejected"}; }); }catch(e){ res = names.map(n=>{ errs[n]="relay unreachable"; return {status:"rejected"}; }); } }
+  else res = await Promise.allSettled(names.map(n => SRC[n](cur)));
+  const quotes = {}, failed = [];
+  res.forEach((r,i)=> r.status==="fulfilled" ? quotes[names[i]] = r.value : failed.push(names[i]));
+  $("prices").innerHTML = names.map(n => quotes[n]
+    ? `<tr><td>${n}</td><td class="r">${f2(quotes[n].bid)}</td><td class="r">${f2(quotes[n].ask)}</td><td class="r dim">${(FEES[n]/100).toFixed(2)}%</td></tr>`
+    : `<tr><td>${n}</td><td class="r dim" colspan="3">unavailable${errs[n]?" ("+errs[n].slice(0,48)+")":""}</td></tr>`).join("");
+  const ok = Object.keys(quotes).length;
+  window.SPIDER_CEX.report(Object.fromEntries(names.map(n=>[n, quotes[n]?{ok:true,txt:f2((quotes[n].bid+quotes[n].ask)/2,cur==="BTC"?0:2)}:{ok:false,txt:"x"}])), failed.length&&ok===0?"Check your connection; this page may be blocking outside requests.":"");
+  if(ok < 2){
+    $("state").textContent = "need 2+ exchanges"; $("state").className = "pill bad";
+    $("bestNet").textContent = "--"; $("bestDesc").textContent = failed.length ? "Could not reach: "+failed.join(", ")+". Some exchanges block browsers or certain countries." : "";
+    busy = false; return;
+  }
+  const ranked = rankPairs(quotes, size, extra);
+  const top = ranked[0];
+  $("bestNet").textContent = (top.net>=0?"+":"") + f2(top.net,1) + " bps (" + (top.usd>=0?"+$":"-$") + f2(Math.abs(top.usd)) + " on $" + f2(size,0) + ")";
+  $("bestNet").className = "big " + (top.net>=thr ? "good" : top.net>0 ? "warn" : "bad");
+  $("bestDesc").textContent = "Buy on " + top.buy + " @ " + f2(top.ask) + ", sell on " + top.sell + " @ " + f2(top.bid);
+  $("pairs").innerHTML = ranked.slice(0,5).map(p=>`<tr><td>${p.buy} → ${p.sell}</td><td class="r">${f2(p.gross,1)}</td><td class="r ${p.net>=thr?'good':p.net>0?'warn':'bad'}">${f2(p.net,1)}</td><td class="r">${p.usd<0?'-':''}$${f2(Math.abs(p.usd))}</td></tr>`).join("");
+  if(top.net >= thr){
+    hits.unshift({ts:new Date().toISOString(), sym:cur, buy:top.buy, sell:top.sell, ask:top.ask, bid:top.bid, gross:top.gross, net:top.net, usd:top.usd, size});
+    hits = hits.slice(0,500); renderLog();
+    if(navigator.vibrate) navigator.vibrate(120);
+  }
+  $("state").textContent = "live (" + ok + "/" + names.length + " exchanges)"; $("state").className = "pill good";
+  $("upd").textContent = new Date().toLocaleTimeString() + (window.RELAY?" · via relay":" · direct");
+  busy = false;
+}
+function renderLog(){
+  $("hitCount").textContent = hits.length;
+  $("log").innerHTML = hits.length ? hits.slice(0,50).map(h=>`<div>${new Date(h.ts).toLocaleTimeString()} <b>${h.sym}</b> ${h.buy}→${h.sell} <span class="good">${f2(h.net,1)} bps</span> ($${f2(h.usd)})</div>`).join("") : '<span class="dim">Opportunities above your threshold appear here.</span>';
+}
+$("go").onclick = () => {
+  saveCfg();
+  if(running){ clearInterval(timer); running=false; window.SPIDER_CEX.stop(); $("go").textContent="Start scanning"; $("go").className="btn"; $("state").textContent="stopped"; $("state").className="pill"; return; }
+  running = true; window.SPIDER_CEX.start(); $("go").textContent="Stop"; $("go").className="btn stop";
+  tick(); timer = setInterval(tick, Math.max(2,(+$("every").value||5))*1000);
+};
+$("csv").onclick = () => {
+  const rows = [["ts","symbol","buy","sell","buy_ask","sell_bid","gross_bps","net_bps","net_usd","size_usd"]].concat(hits.map(h=>[h.ts,h.sym,h.buy,h.sell,h.ask,h.bid,h.gross.toFixed(2),h.net.toFixed(2),h.usd.toFixed(2),h.size]));
+  const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([rows.map(r=>r.join(",")).join("\n")],{type:"text/csv"})); a.download = "arb_hits.csv"; a.click();
+};
+
+
+})();
+
+// ---------------- TAB 2: flash loan arbitrage ----------------
+const ARB_BYTECODE = "0x60c060405234801561000f575f80fd5b50604051610f68380380610f6883398101604081905261002e91610074565b336080526001600160a01b0391821660a0525f80546001600160a01b031916919092161790556100a5565b80516001600160a01b038116811461006f575f80fd5b919050565b5f8060408385031215610085575f80fd5b61008e83610059565b915061009c60208401610059565b90509250929050565b60805160a051610e726100f65f395f8181608301528181610165015281816106c801526108ea01525f818161011101528181610761015281816107c5015281816108aa01526109980152610e725ff3fe608060405234801561000f575f80fd5b506004361061007a575f3560e01c8063839006f211610058578063839006f2146100f75780638da5cb5b1461010c578063ae03593d14610133578063da2ca9b514610146575f80fd5b806316f0115b1461007e5780631b11d0ff146100c25780632301d775146100e5575b5f80fd5b6100a57f000000000000000000000000000000000000000000000000000000000000000081565b6040516001600160a01b0390911681526020015b60405180910390f35b6100d56100d0366004610a12565b610159565b60405190151581526020016100b9565b5f546100a5906001600160a01b031681565b61010a610105366004610ab3565b610756565b005b6100a57f000000000000000000000000000000000000000000000000000000000000000081565b61010a610141366004610ad3565b61089f565b61010a610154366004610ab3565b61098d565b5f336001600160a01b037f000000000000000000000000000000000000000000000000000000000000000016146101a357604051636f61f64160e01b815260040160405180910390fd5b6001600160a01b03841630146101cc57604051630377b97960e11b815260040160405180910390fd5b5f6101d983850185610b5c565b805160405163095ea7b360e01b81526001600160a01b039182166004820152602481018a905291925089169063095ea7b3906044016020604051808303815f875af115801561022a573d5f803e3d5ffd5b505050506040513d601f19601f8201168201806040525081019061024e9190610bd4565b506040805160028082526060820183525f9260208301908036833701905050905088815f8151811061028257610282610bf3565b60200260200101906001600160a01b031690816001600160a01b0316815250508160400151816001815181106102ba576102ba610bf3565b6001600160a01b03928316602091820292909201015282516040516338ed173960e01b81525f9291909116906338ed173990610302908c908590879030904290600401610c07565b5f604051808303815f875af115801561031d573d5f803e3d5ffd5b505050506040513d5f823e601f3d908101601f191682016040526103449190810190610c77565b905082604001516001600160a01b031663095ea7b384602001518360018151811061037157610371610bf3565b60200260200101516040518363ffffffff1660e01b81526004016103aa9291906001600160a01b03929092168252602082015260400190565b6020604051808303815f875af11580156103c6573d5f803e3d5ffd5b505050506040513d601f19601f820116820180604052508101906103ea9190610bd4565b506040805160028082526060820183525f926020830190803683370190505090508360400151815f8151811061042257610422610bf3565b60200260200101906001600160a01b031690816001600160a01b0316815250508a8160018151811061045657610456610bf3565b60200260200101906001600160a01b031690816001600160a01b03168152505083602001516001600160a01b03166338ed17398360018151811061049c5761049c610bf3565b60200260200101515f8430426040518663ffffffff1660e01b81526004016104c8959493929190610c07565b5f604051808303815f875af11580156104e3573d5f803e3d5ffd5b505050506040513d5f823e601f3d908101601f1916820160405261050a9190810190610c77565b505f6105168a8c610d37565b6040516370a0823160e01b81523060048201529091505f906001600160a01b038e16906370a0823190602401602060405180830381865afa15801561055d573d5f803e3d5ffd5b505050506040513d601f19601f820116820180604052508101906105819190610d50565b90508560600151826105939190610d37565b8110156105d157808660600151836105ab9190610d37565b6040516322416f1f60e11b81526004810192909252602482015260440160405180910390fd5b5f6105dc8383610d67565b5f5460405163a9059cbb60e01b81526001600160a01b039182166004820152602481018390529192508f169063a9059cbb906044016020604051808303815f875af115801561062d573d5f803e3d5ffd5b505050506040513d601f19601f820116820180604052508101906106519190610bd4565b505f8054906101000a90046001600160a01b03166001600160a01b03168e6001600160a01b03167fb78c08116eea973692670a3a0b87d829f37c3a28a2240c68e02147298c6409bc836040516106a991815260200190565b60405180910390a360405163095ea7b360e01b81526001600160a01b037f000000000000000000000000000000000000000000000000000000000000000081166004830152602482018590528f169063095ea7b3906044016020604051808303815f875af115801561071d573d5f803e3d5ffd5b505050506040513d601f19601f820116820180604052508101906107419190610bd4565b5060019e9d5050505050505050505050505050565b336001600160a01b037f0000000000000000000000000000000000000000000000000000000000000000161461079f576040516330cd747160e01b815260040160405180910390fd5b6040516370a0823160e01b81523060048201526001600160a01b0382169063a9059cbb907f00000000000000000000000000000000000000000000000000000000000000009083906370a0823190602401602060405180830381865afa15801561080b573d5f803e3d5ffd5b505050506040513d601f19601f8201168201806040525081019061082f9190610d50565b6040516001600160e01b031960e085901b1681526001600160a01b03909216600483015260248201526044016020604051808303815f875af1158015610877573d5f803e3d5ffd5b505050506040513d601f19601f8201168201806040525081019061089b9190610bd4565b5050565b336001600160a01b037f000000000000000000000000000000000000000000000000000000000000000016146108e8576040516330cd747160e01b815260040160405180910390fd5b7f00000000000000000000000000000000000000000000000000000000000000006001600160a01b03166342b0b77c3085858560405160200161092b9190610d7a565b6040516020818303038152906040525f6040518663ffffffff1660e01b815260040161095b959493929190610dd7565b5f604051808303815f87803b158015610972575f80fd5b505af1158015610984573d5f803e3d5ffd5b50505050505050565b336001600160a01b037f000000000000000000000000000000000000000000000000000000000000000016146109d6576040516330cd747160e01b815260040160405180910390fd5b5f80546001600160a01b0319166001600160a01b0392909216919091179055565b80356001600160a01b0381168114610a0d575f80fd5b919050565b5f805f805f8060a08789031215610a27575f80fd5b610a30876109f7565b95506020870135945060408701359350610a4c606088016109f7565b9250608087013567ffffffffffffffff811115610a67575f80fd5b8701601f81018913610a77575f80fd5b803567ffffffffffffffff811115610a8d575f80fd5b896020828401011115610a9e575f80fd5b60208201935080925050509295509295509295565b5f60208284031215610ac3575f80fd5b610acc826109f7565b9392505050565b5f805f83850360c0811215610ae6575f80fd5b610aef856109f7565b9350602085013592506080603f1982011215610b09575f80fd5b506040840190509250925092565b634e487b7160e01b5f52604160045260245ffd5b604051601f8201601f1916810167ffffffffffffffff81118282101715610b5457610b54610b17565b604052919050565b5f6080828403128015610b6d575f80fd5b506040516080810167ffffffffffffffff81118282101715610b9157610b91610b17565b604052610b9d836109f7565b8152610bab602084016109f7565b6020820152610bbc604084016109f7565b60408201526060928301359281019290925250919050565b5f60208284031215610be4575f80fd5b81518015158114610acc575f80fd5b634e487b7160e01b5f52603260045260245ffd5b5f60a0820187835286602084015260a0604084015280865180835260c0850191506020880192505f5b81811015610c575783516001600160a01b0316835260209384019390920191600101610c30565b50506001600160a01b039590951660608401525050608001529392505050565b5f60208284031215610c87575f80fd5b815167ffffffffffffffff811115610c9d575f80fd5b8201601f81018413610cad575f80fd5b805167ffffffffffffffff811115610cc757610cc7610b17565b8060051b610cd760208201610b2b565b91825260208184018101929081019087841115610cf2575f80fd5b6020850194505b83851015610d1857845180835260209586019590935090910190610cf9565b979650505050505050565b634e487b7160e01b5f52601160045260245ffd5b80820180821115610d4a57610d4a610d23565b92915050565b5f60208284031215610d60575f80fd5b5051919050565b81810381811115610d4a57610d4a610d23565b608081016001600160a01b03610d8f846109f7565b1682526001600160a01b03610da6602085016109f7565b1660208301526001600160a01b03610dc0604085016109f7565b166040830152606092830135929091019190915290565b60018060a01b038616815260018060a01b038516602082015283604082015260a060608201525f83518060a0840152806020860160c085015e5f60c0828501015260c0601f19601f83011684010191505061ffff83166080830152969550505050505056fea2646970667358221220cb438b443dfcf1d2ced692e8de88428dc9b83e5d0e3bd39ce9d0c2ff9e52c42b64736f6c634300081a0033";
+const SEL = {execute:"ae03593d", getAmountsOut:"d06ca61f"};
+const REVERTS = {"4482de3e":"Unprofitable (trade would not clear your minimum)","30cd7471":"NotOwner","6f61f641":"NotPool","06ef72f2":"BadInitiator"};
+const PRESETS = {
+  eth:  {chain:1,    pool:"0x87870Bca3F3fD6335C3F4ce8392D69350B4fA4E2", ra:"0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D", rb:"0xd9e1cE17f2641f24aE83637ab66a2cca9C378B9F", stable:"0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48", mid:"0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599"},
+  base: {chain:8453, pool:"0xA238Dd80C259a72e81d7e4664a9801593F98d1c5", ra:"0x4752ba5DBc23f44D87826276BF6Fd6b1C372aD24", rb:"0x6BDED42c6DA8FBf0d2bA55B2fa120C5e0c8D7891", stable:"0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", mid:"0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf"}
+};
+const hex = (n) => "0x" + BigInt(n).toString(16);
+const w32 = (h) => h.replace(/^0x/,"").toLowerCase().padStart(64,"0");
+const wAddr = (a) => { if(!/^0x[0-9a-fA-F]{40}$/.test(a||"")) throw new Error("Bad address: "+a); return w32(a); };
+const wUint = (n) => BigInt(n).toString(16).padStart(64,"0");
+const parseUnits = (s,d) => { const [i,fr=""] = String(s).trim().split("."); return BigInt(i||"0")*10n**BigInt(d) + BigInt((fr+"0".repeat(d)).slice(0,d)||"0"); };
+const fmtUnits = (v,d) => Number(v)/10**d;
+let acct = null, chainId = null, dTimer = null, dRunning = false, dBusy = false, dCount = 0, sendBusy = false;
+const eth = () => window.ethereum;
+const rpc = (method, params=[]) => { if(!eth()) throw new Error("No wallet found. Open this page in your wallet's browser."); return eth().request({method, params}); };
+const dlog = (m, cls="") => { dCount++; $("dCount").textContent = dCount; const d = document.createElement("div"); d.innerHTML = new Date().toLocaleTimeString()+" <span class='"+cls+"'></span>"; d.lastChild.textContent = m; const L=$("dLog"); if(dCount===1) L.innerHTML=""; L.prepend(d); };
+const errText = (e) => { const data = (e && (e.data && (e.data.data||e.data) || (e.error&&e.error.data))) ; const s = typeof data==="string"? data : ""; const sel = s.slice(2,10); return REVERTS[sel] || (e&&e.message||String(e)).slice(0,160); };
+
+try{ const sv = JSON.parse(localStorage.getItem("arb_dex")||"{}"); for(const [k,v] of Object.entries(sv)) if($(k)) $(k).value = v; }catch(e){}
+const DEX_FIELDS = ["fPool","fRA","fRB","fStable","fMid","fDec","fBorrow","fMin","fGas","fEth","fProfit","fPrem","fArb"];
+const saveDex = () => { try{ const o={}; DEX_FIELDS.forEach(k=>o[k]=$(k).value); localStorage.setItem("arb_dex", JSON.stringify(o)); }catch(e){} };
+$("preset").onchange = async () => { const p = PRESETS[$("preset").value]; if(!p) return;
+  $("fPool").value=p.pool; $("fRA").value=p.ra; $("fRB").value=p.rb; $("fStable").value=p.stable; $("fMid").value=p.mid; $("fDec").value=6; saveDex();
+  if(eth() && chainId!==null && chainId!==p.chain){ try{ await rpc("wallet_switchEthereumChain",[{chainId:hex(p.chain)}]); }catch(e){ dlog("Switch your wallet to chain "+p.chain+" manually.","warn"); } } };
+DEX_FIELDS.forEach(k=>$(k).addEventListener("change", saveDex));
+const arbShow = () => { $("cState").textContent = $("fArb").value ? "Using contract "+$("fArb").value : "Not deployed yet."; }; arbShow(); $("fArb").addEventListener("change", arbShow);
+
+async function connect(){
+  try{ const a = await rpc("eth_requestAccounts"); acct = a[0]; chainId = parseInt(await rpc("eth_chainId"),16);
+    $("wState").textContent = "chain "+chainId; $("wState").className="pill good"; $("wAddr").textContent = acct; $("connect").textContent="Wallet connected";
+    if(!$("fProfit").value) $("fProfit").placeholder = acct;
+    eth().on && eth().on("accountsChanged", a=>{ acct=a[0]||null; $("wAddr").textContent=acct||""; });
+    eth().on && eth().on("chainChanged", c=>{ chainId=parseInt(c,16); $("wState").textContent="chain "+chainId; });
+  }catch(e){ $("wState").textContent="error"; $("wAddr").textContent = errText(e); }
+}
+$("connect").onclick = connect;
+
+$("deploy").onclick = async () => {
+  try{
+    if(!acct) await connect(); if(!acct) return;
+    const profit = $("fProfit").value.trim() || acct;
+    if(!confirm("Deploy the arbitrage contract?\n\nProfit wallet: "+profit+"\nAave pool: "+$("fPool").value+"\n\nYour wallet will ask you to confirm and pay gas.")) return;
+    const data = ARB_BYTECODE + wAddr($("fPool").value) + wAddr(profit);
+    const h = await rpc("eth_sendTransaction",[{from:acct, data}]);
+    $("cState").textContent = "Deploy sent: "+h+" ... waiting for confirmation"; dlog("Deploy tx "+h);
+    for(let i=0;i<90;i++){ await new Promise(r=>setTimeout(r,3000)); const rc = await rpc("eth_getTransactionReceipt",[h]);
+      if(rc){ if(rc.status==="0x1" && rc.contractAddress){ $("fArb").value = rc.contractAddress; saveDex(); arbShow(); dlog("Contract deployed at "+rc.contractAddress,"good"); } else { $("cState").textContent="Deploy failed on-chain."; dlog("Deploy failed","bad"); } return; } }
+    $("cState").textContent = "Still pending. Check your wallet, then paste the contract address above.";
+  }catch(e){ $("cState").textContent = "Deploy error: "+errText(e); }
+};
+
+async function quote(router, amountIn, a, b){
+  const data = "0x"+SEL.getAmountsOut + wUint(amountIn) + wUint(64) + wUint(2) + wAddr(a) + wAddr(b);
+  const res = await rpc("eth_call",[{to:router, data},"latest"]);
+  const words = res.slice(2).match(/.{64}/g)||[]; if(words.length<4) throw new Error("empty quote (check router/token addresses and chain)");
+  return BigInt("0x"+words[words.length-1]);
+}
+async function ethUsd(){ const m = parseFloat($("fEth").value); if(m>0) return m;
+  try{ const r = await fetch("https://api.exchange.coinbase.com/products/ETH-USD/ticker"); return parseFloat((await r.json()).price)||3000; }catch(e){ return 3000; } }
+
+// ---------------- flash loan agent ----------------
+const SEL2 = {premium:"074b2e43", reserveData:"35ea6a75", balanceOf:"70a08231"};
+let lastVerdict = "", lastSendAt = 0;
+const usd = (x,d=2) => (x<0?"-$":"$")+f2(Math.abs(x),d);
+function agRender(verdict, vcls, checks, rows, dec, ra){
+  $("agVerdict").textContent = verdict; $("agVerdict").className = "big "+vcls;
+  const box = $("agChecks"); box.textContent = "";
+  for(const c of checks){ const d = document.createElement("div"); d.style.margin = "4px 0";
+    const s = document.createElement("span"); s.textContent = c.state===true?"✓ ":c.state===false?"✗ ":"! "; s.className = c.state===true?"good":c.state===false?"bad":"warn"; s.style.fontWeight = "700";
+    const b = document.createElement("b"); b.textContent = c.label+": "; const t = document.createElement("span"); t.textContent = c.detail;
+    d.append(s,b,t); box.append(d); }
+  const tb = $("agCurve"); tb.textContent = "";
+  if(rows.length){ const h = document.createElement("tr"); ["Loan size","Route","Net before gas"].forEach((x,i)=>{ const th=document.createElement("th"); th.textContent=x; if(i===2) th.className="r"; h.append(th); }); tb.append(h);
+    for(const r of rows){ const tr = document.createElement("tr"); const c1=document.createElement("td"), c2=document.createElement("td"), c3=document.createElement("td");
+      c1.textContent = "$"+f2(fmtUnits(r.size,dec),0); c2.textContent = (r.buy===ra?"A → B":"B → A"); c3.className = "r "+(r.profit>0n?"good":"bad"); c3.textContent = (r.profit<0n?"-$":"+$")+f2(Math.abs(fmtUnits(r.profit,dec)));
+      tr.append(c1,c2,c3); tb.append(tr); } }
+}
+async function dexTick(){
+  if(dBusy) return; dBusy = true;
+  const checks = []; const add = (state,label,detail) => checks.push({state,label,detail});
+  let verdict = "NO-GO", vcls = "bad", rows = [], dec = 6, ra = "";
+  try{
+    if(!acct) await connect(); if(!acct) throw new Error("Connect your wallet first");
+    dec = parseInt($("fDec").value)||6; ra = $("fRA").value.trim();
+    const cap = parseUnits($("fBorrow").value, dec), minP = parseUnits($("fMin").value, dec);
+    const pool=$("fPool").value.trim(), stable=$("fStable").value.trim(), mid=$("fMid").value.trim(), rb=$("fRB").value.trim(), arb=$("fArb").value.trim();
+    const gasCap = parseFloat($("fGas").value)||30;
+
+    // 1. Flash loan fee, read from Aave itself
+    let premBps = Math.round(parseFloat($("fPrem").value)||5);
+    try{ const r = await rpc("eth_call",[{to:pool,data:"0x"+SEL2.premium},"latest"]); const v = Number(BigInt(r)); if(!(v>=0 && v<=1000)) throw new Error("odd value"); premBps = v; $("fPrem").value = v; add(true,"Flash loan fee",(v/100).toFixed(2)+"% (read from Aave)"); }
+    catch(e){ add("warn","Flash loan fee","could not read it from Aave, using "+premBps+" bps from your settings"); }
+
+    // 2. How much Aave can lend right now
+    let borrowMax = cap;
+    try{ const rd = await rpc("eth_call",[{to:pool,data:"0x"+SEL2.reserveData+wAddr(stable)},"latest"]); const wd = rd.slice(2).match(/.{64}/g)||[]; const aTok = "0x"+(wd[8]||"").slice(24);
+      if(!/^0x[0-9a-fA-F]{40}$/.test(aTok) || /^0x0+$/.test(aTok)) throw new Error("no reserve");
+      const bal = BigInt(await rpc("eth_call",[{to:stable,data:"0x"+SEL2.balanceOf+wAddr(aTok)},"latest"])); const safe = bal*9n/10n;
+      if(safe < cap){ borrowMax = safe; add(safe>0n?"warn":false,"Aave liquidity","only $"+f2(fmtUnits(bal,dec),0)+" available, loan size capped at $"+f2(fmtUnits(safe,dec),0)); }
+      else add(true,"Aave liquidity","$"+f2(fmtUnits(bal,dec),0)+" available, enough for your size"); }
+    catch(e){ add("warn","Aave liquidity","could not read it; the simulation below still catches a loan that cannot be filled"); }
+    if(borrowMax <= 0n) throw new Error("Aave has no liquidity for this token on this network");
+
+    // 3. Try four loan sizes in both directions and find the best one
+    const sizes = [10n,25n,50n,100n].map(p=>borrowMax*p/100n).filter(s=>s>0n);
+    rows = await Promise.all(sizes.map(async size=>{ let best=null;
+      for(const [buy,sell] of [[ra,rb],[rb,ra]]){ const m = await quote(buy,size,stable,mid); const back = await quote(sell,m,mid,stable);
+        const profit = back - size - size*BigInt(premBps)/10000n; if(!best || profit>best.profit) best = {size,buy,sell,profit}; }
+      return best; }));
+    window.SPIDER_DEX.report({"Router A":{ok:true,txt:"ok"},"Router B":{ok:true,txt:"ok"}});
+    const top = rows.reduce((a,b)=>b.profit>a.profit?b:a);
+    add(top.profit>0n,"Price gap between the DEXs", top.profit>0n ? "best at a $"+f2(fmtUnits(top.size,dec),0)+" loan: +$"+f2(fmtUnits(top.profit,dec))+" after swap and flash fees, before gas" : "no profit after swap fees and the flash fee at any size tested");
+    $("dBest").textContent = (top.profit<0n?"-$":"+$")+f2(Math.abs(fmtUnits(top.profit,dec)))+" before gas";
+    $("dBest").className = "big "+(top.profit>minP?"good":top.profit>0n?"warn":"bad");
+    $("dDesc").textContent = "Best size $"+f2(fmtUnits(top.size,dec),0)+", "+(top.buy===ra?"buy on A, sell on B":"buy on B, sell on A");
+
+    // 4. Gas and the exact-transaction simulation
+    const gp = BigInt(await rpc("eth_gasPrice")), gwei = Number(gp)/1e9, px = await ethUsd();
+    add(gwei<=gasCap,"Gas price", f2(gwei,1)+" gwei"+(gwei<=gasCap?"":", above your cap of "+gasCap));
+    let gasUnits = 450000n, simOk = null, data = "";
+    if(!arb){ add("warn","Contract","not deployed yet, so no trade can be sent. Deploy it above."); }
+    else if(top.profit>0n){
+      data = "0x"+SEL.execute+wAddr(stable)+wUint(top.size)+wAddr(top.buy)+wAddr(top.sell)+wAddr(mid)+wUint(minP);
+      try{ await rpc("eth_call",[{from:acct,to:arb,data},"latest"]); simOk = true; add(true,"Simulation","the exact transaction succeeds right now");
+        try{ gasUnits = BigInt(await rpc("eth_estimateGas",[{from:acct,to:arb,data}])); }catch(e){} }
+      catch(e){ simOk = false; add(false,"Simulation","would fail: "+errText(e)); }
+    }
+    const gasUsd = Number(gasUnits*gp)/1e18*px, netUsd = fmtUnits(top.profit,dec) - gasUsd, minUsd = fmtUnits(minP,dec);
+    if(top.profit>0n) add(netUsd>minUsd,"Profit after gas","about "+usd(netUsd)+" (gas about "+usd(gasUsd)+", your minimum is "+usd(minUsd,0)+")");
+
+    const hardFail = checks.some(c=>c.state===false);
+    if(!hardFail && arb && simOk){ verdict = "GO"; vcls = "good"; } else if(!hardFail){ verdict = "WATCHING"; vcls = "warn"; }
+    $("dState").textContent = "live"; $("dState").className = "pill good";
+    agRender(verdict, vcls, checks, rows, dec, ra);
+
+    if(verdict === "GO"){
+      if(lastVerdict !== "GO") dlog("GO: estimated net "+usd(netUsd)+" after about "+usd(gasUsd)+" gas","good");
+      if(!$("armed").checked){ if(lastVerdict !== "GO") dlog("Watch-only mode: not sent."); }
+      else if(!sendBusy && Date.now()-lastSendAt > 60000){ sendBusy = true; lastSendAt = Date.now();
+        try{ const h = await rpc("eth_sendTransaction",[{from:acct,to:arb,data,gas:hex(gasUnits*12n/10n),maxFeePerGas:hex(BigInt(Math.round(gasCap*1e9)))}]); dlog("Sent "+h+" (profit goes to your profit wallet if it lands)","good"); }
+        catch(e){ dlog("Not sent: "+errText(e),"warn"); }
+        sendBusy = false; }
+    } else if(verdict !== lastVerdict){ dlog(verdict+": "+(checks.filter(c=>c.state===false)[0]||checks.filter(c=>c.state==="warn")[0]||{label:"",detail:""}).detail); }
+    lastVerdict = verdict;
+  }catch(e){
+    add(false,"Agent stopped", errText(e)); $("dState").textContent = "error"; $("dState").className = "pill bad";
+    agRender("NO-GO","bad",checks,rows,dec,ra);
+    window.SPIDER_DEX.report({"Router A":{ok:false,txt:"x"},"Router B":{ok:false,txt:"x"}}, errText(e));
+    if(lastVerdict !== "ERR:"+errText(e)){ dlog(errText(e),"bad"); lastVerdict = "ERR:"+errText(e); }
+  }
+  dBusy = false;
+}
+$("dGo").onclick = () => {
+  if(dRunning){ clearInterval(dTimer); dRunning=false; window.SPIDER_DEX.stop(); $("dGo").textContent="Start scanning"; $("dGo").className="btn"; $("dState").textContent="stopped"; $("dState").className="pill"; return; }
+  if($("armed").checked && !confirm("Armed mode will send qualifying trades to your wallet for approval. You approve each one. Continue?")) return;
+  saveDex(); dRunning=true; window.SPIDER_DEX.start(); $("dGo").textContent="Stop"; $("dGo").className="btn stop"; dexTick(); dTimer=setInterval(dexTick, 6000);
+};
+</script>
+</body>
+</html>
